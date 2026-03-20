@@ -19,7 +19,17 @@ export async function GET(request) {
         },
       }
     )
-    await supabase.auth.exchangeCodeForSession(code)
+    const { data } = await supabase.auth.exchangeCodeForSession(code)
+    
+    // Store provider_token in a cookie so dashboard can access it
+    if (data?.session?.provider_token) {
+      cookieStore.set('yt_token', data.session.provider_token, { 
+        httpOnly: false, 
+        secure: true, 
+        sameSite: 'lax',
+        maxAge: 3600 
+      })
+    }
   }
 
   return NextResponse.redirect(`${origin}/dashboard`)
