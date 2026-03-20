@@ -20,7 +20,7 @@ export async function POST(request) {
     )
 
     const { data: { session } } = await supabase.auth.getSession()
-    
+
     // Get token from session or cookie
     const cookieHeader = request.headers.get('cookie') || ''
     const ytToken = cookieHeader.split('; ').find(r => r.startsWith('yt_token='))?.split('=')[1]
@@ -43,7 +43,6 @@ export async function POST(request) {
       status: { privacyStatus: visibility || 'public' },
     }
 
-    // Get resumable upload URL from YouTube
     const initRes = await fetch(
       'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
       {
