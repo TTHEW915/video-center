@@ -9,6 +9,10 @@ export default function LoginPage() {
       provider: 'google',
       options: {
         scopes: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube',
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
         redirectTo: `${window.location.origin}/auth/callback`,
       },
     })
@@ -47,7 +51,6 @@ export default function LoginPage() {
           background: '#fff', border: 'none',
           color: '#000', fontSize: 14, fontWeight: 600,
           cursor: 'pointer', fontFamily: "'DM Mono', monospace",
-          transition: 'all 0.2s',
         }}>
           <svg width="18" height="18" viewBox="0 0 24 24">
             <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -58,15 +61,14 @@ export default function LoginPage() {
           Continue with Google (YouTube)
         </button>
 
-        <div style={{ textAlign: 'center', color: '#333', fontSize: 11, margin: '4px 0' }}>
+        <div style={{ textAlign: 'center', color: '#333', fontSize: 11 }}>
           More platforms coming — TikTok, Instagram, Twitter
         </div>
 
         <div style={{
           background: '#131315', border: '1px solid #1e1e21',
           borderRadius: 10, padding: '12px 16px',
-          color: '#555', fontSize: 11, lineHeight: 1.7,
-          textAlign: 'center',
+          color: '#555', fontSize: 11, lineHeight: 1.7, textAlign: 'center',
         }}>
           🔒 Your credentials are never stored by this app.<br/>
           Google handles your login securely.
