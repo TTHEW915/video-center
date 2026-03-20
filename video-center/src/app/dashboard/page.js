@@ -41,7 +41,6 @@ export default function Dashboard() {
         if (!mounted) return
         if (!session) { router.push('/'); return }
         setUser(session.user)
-        // Try provider_token from session first, then from cookie
         const token = session.provider_token ||
           document.cookie.split('; ').find(r => r.startsWith('yt_token='))?.split('=')[1] || null
         setAccessToken(token)
@@ -75,56 +74,36 @@ export default function Dashboard() {
 
   const uploadToYouTube = async () => {
     if (!file) return
-    if (!accessToken) {
-      setError('No YouTube access token. Please sign out and sign in again, and click Allow when Google asks for YouTube permissions.')
-      return
-    }
     setUploading(true)
     setError(null)
     setResult(null)
     setProgress(0)
-    setStatus('Initializing YouTube upload...')
+    setStatus('Initializing...')
 
     try {
-      const metadata = {
-        snippet: {
+      // Step 1: Get upload URL from our API (bypasses CORS)
+      const res = await fetch('/api/upload/youtube', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           title: meta.title || file.name.replace(/\.[^.]+$/, ''),
           description: meta.description || '',
-          tags: meta.tags ? meta.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-          categoryId: '22',
-        },
-        status: { privacyStatus: meta.visibility || 'public' },
-      }
+          tags: meta.tags || '',
+          visibility: meta.visibility || 'public',
+          fileType: file.type,
+          fileSize: file.size,
+        }),
+      })
 
-      const initRes = await fetch(
-        'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'X-Upload-Content-Type': file.type,
-            'X-Upload-Content-Length': String(file.size),
-          },
-          body: JSON.stringify(metadata),
-        }
-      )
-
-      if (!initRes.ok) {
-        const errText = await initRes.text()
-        let errMsg = 'Failed to start YouTube upload.'
-        try { const j = JSON.parse(errText); errMsg = j.error?.message || errMsg } catch(e) {}
-        throw new Error(errMsg)
-      }
-
-      const uploadUrl = initRes.headers.get('location')
-      if (!uploadUrl) throw new Error('No upload URL returned from YouTube')
+      const data = await res.json()
+      if (!data.uploadUrl) throw new Error(data.error || 'Failed to get upload URL')
 
       setStatus('Uploading to YouTube...')
 
+      // Step 2: Upload directly to YouTube's URL (no size limit, no CORS issue)
       await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest()
-        xhr.open('PUT', uploadUrl)
+        xhr.open('PUT', data.uploadUrl)
         xhr.setRequestHeader('Content-Type', file.type)
 
         xhr.upload.onprogress = (e) => {
@@ -138,20 +117,20 @@ export default function Dashboard() {
         xhr.onload = () => {
           if (xhr.status === 200 || xhr.status === 201) {
             try {
-              const data = JSON.parse(xhr.responseText)
-              setResult({ videoId: data.id, url: `https://youtube.com/watch?v=${data.id}` })
+              const json = JSON.parse(xhr.responseText)
+              setResult({ videoId: json.id, url: `https://youtube.com/watch?v=${json.id}` })
               setStatus('')
               setProgress(100)
               resolve()
             } catch(e) {
-              reject(new Error('Upload succeeded but could not parse response'))
+              reject(new Error('Upload done but could not read response'))
             }
           } else {
             reject(new Error(`Upload failed: ${xhr.responseText}`))
           }
         }
 
-        xhr.onerror = () => reject(new Error('Network error during upload'))
+        xhr.onerror = () => reject(new Error('Network error. Check your connection.'))
         xhr.send(file)
       })
 
