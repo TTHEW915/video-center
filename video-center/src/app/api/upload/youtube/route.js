@@ -2,6 +2,8 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 
+export const dynamic = 'force-dynamic'
+
 export async function POST(request) {
   try {
     const cookieStore = cookies()
@@ -18,70 +20,53 @@ export async function POST(request) {
     )
 
     const { data: { session } } = await supabase.auth.getSession()
-    if (!session) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    
+    // Get token from session or cookie
+    const cookieHeader = request.headers.get('cookie') || ''
+    const ytToken = cookieHeader.split('; ').find(r => r.startsWith('yt_token='))?.split('=')[1]
+    const accessToken = session?.provider_token || ytToken
 
-    const accessToken = session.provider_token
-    const formData = await request.formData()
-    const file = formData.get('file')
-    const title = formData.get('title') || 'My Video'
-    const description = formData.get('description') || ''
-    const tags = formData.get('tags') || ''
-    const privacyStatus = formData.get('visibility') || 'public'
+    if (!accessToken) {
+      return NextResponse.json({ error: 'No YouTube access token. Please sign out and sign in again.' }, { status: 401 })
+    }
 
-    // Step 1: Insert video metadata
+    const body = await request.json()
+    const { title, description, tags, visibility, fileType, fileSize } = body
+
     const metadata = {
       snippet: {
-        title,
-        description,
+        title: title || 'My Video',
+        description: description || '',
         tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [],
         categoryId: '22',
       },
-      status: { privacyStatus },
+      status: { privacyStatus: visibility || 'public' },
     }
 
+    // Get resumable upload URL from YouTube
     const initRes = await fetch(
       'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
       {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          'X-Upload-Content-Type': file.type,
-          'X-Upload-Content-Length': file.size,
+          'X-Upload-Content-Type': fileType,
+          'X-Upload-Content-Length': String(fileSize),
         },
         body: JSON.stringify(metadata),
       }
     )
 
     if (!initRes.ok) {
-      const err = await initRes.text()
-      return NextResponse.json({ error: 'YouTube init failed', details: err }, { status: 500 })
+      const errText = await initRes.text()
+      let errMsg = 'Failed to initialize YouTube upload'
+      try { const j = JSON.parse(errText); errMsg = j.error?.message || errMsg } catch(e) {}
+      return NextResponse.json({ error: errMsg }, { status: 500 })
     }
 
     const uploadUrl = initRes.headers.get('location')
-
-    // Step 2: Upload the actual file
-    const fileBuffer = await file.arrayBuffer()
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': file.type,
-        'Content-Length': file.size,
-      },
-      body: fileBuffer,
-    })
-
-    if (!uploadRes.ok) {
-      const err = await uploadRes.text()
-      return NextResponse.json({ error: 'YouTube upload failed', details: err }, { status: 500 })
-    }
-
-    const result = await uploadRes.json()
-    return NextResponse.json({
-      success: true,
-      videoId: result.id,
-      url: `https://youtube.com/watch?v=${result.id}`,
-    })
+    return NextResponse.json({ uploadUrl })
 
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
