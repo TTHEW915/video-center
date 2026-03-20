@@ -1,78 +1,313 @@
 'use client'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { createClient } from '@/lib/supabase'
+import { useRouter } from 'next/navigation'
 
-export default function LoginPage() {
+const emptyMeta = () => ({ title:'', description:'', tags:'', visibility:'public' })
+
+const inputStyle = {
+  width:'100%', padding:'10px 14px', borderRadius:10,
+  background:'#141416', border:'1px solid #252528',
+  color:'#e0e0e0', fontSize:13, outline:'none',
+  fontFamily:"'DM Mono',monospace", boxSizing:'border-box'
+}
+const labelStyle = {
+  color:'#555', fontSize:10, letterSpacing:1.5,
+  textTransform:'uppercase', display:'block', marginBottom:7
+}
+
+export default function Dashboard() {
+  const router = useRouter()
   const supabase = createClient()
+  const [user, setUser] = useState(null)
+  const [accessToken, setAccessToken] = useState(null)
+  const [file, setFile] = useState(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [meta, setMeta] = useState(emptyMeta())
+  const [showMeta, setShowMeta] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [status, setStatus] = useState('')
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+  const fileRef = useRef()
 
-  const signInWithGoogle = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        scopes: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube',
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-        },
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) { router.push('/'); return }
+      setUser(session.user)
+      setAccessToken(session.provider_token)
     })
+  }, [])
+
+  const signOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/')
+  }
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const f = e.dataTransfer.files[0]
+    if (f && f.type.startsWith('video/')) setFile(f)
+  }, [])
+
+  const fmtSize = (b) => {
+    if (b > 1e9) return (b/1e9).toFixed(1) + ' GB'
+    if (b > 1e6) return (b/1e6).toFixed(1) + ' MB'
+    return (b/1e3).toFixed(0) + ' KB'
+  }
+
+  const uploadToYouTube = async () => {
+    if (!file) return
+    if (!accessToken) {
+      setError('No YouTube access. Please sign out and sign in again.')
+      return
+    }
+    setUploading(true)
+    setError(null)
+    setResult(null)
+    setProgress(0)
+    setStatus('Starting upload...')
+
+    try {
+      const metadata = {
+        snippet: {
+          title: meta.title || file.name.replace(/\.[^.]+$/, ''),
+          description: meta.description,
+          tags: meta.tags ? meta.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+          categoryId: '22',
+        },
+        status: { privacyStatus: meta.visibility },
+      }
+
+      setStatus('Initializing YouTube upload...')
+      const initRes = await fetch(
+        'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Upload-Content-Type': file.type,
+            'X-Upload-Content-Length': file.size,
+          },
+          body: JSON.stringify(metadata),
+        }
+      )
+
+      if (!initRes.ok) {
+        const err = await initRes.text()
+        throw new Error('Failed to start upload: ' + err)
+      }
+
+      const uploadUrl = initRes.headers.get('location')
+      setStatus('Uploading to YouTube...')
+
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('PUT', uploadUrl)
+        xhr.setRequestHeader('Content-Type', file.type)
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100)
+            setProgress(pct)
+            setStatus(`Uploading... ${pct}%`)
+          }
+        }
+
+        xhr.onload = () => {
+          if (xhr.status === 200 || xhr.status === 201) {
+            const data = JSON.parse(xhr.responseText)
+            setResult({ videoId: data.id, url: `https://youtube.com/watch?v=${data.id}` })
+            setStatus('')
+            setProgress(100)
+            resolve()
+          } else {
+            reject(new Error('Upload failed: ' + xhr.responseText))
+          }
+        }
+
+        xhr.onerror = () => reject(new Error('Network error during upload'))
+        xhr.send(file)
+      })
+
+    } catch (err) {
+      setError(err.message)
+      setStatus('')
+    }
+    setUploading(false)
+  }
+
+  const reset = () => {
+    setFile(null)
+    setResult(null)
+    setError(null)
+    setMeta(emptyMeta())
+    setProgress(0)
+    setStatus('')
+  }
+
+  if (!user) {
+    return (
+      <div style={{minHeight:'100vh',background:'#080809',display:'flex',alignItems:'center',justifyContent:'center',color:'#555',fontFamily:"'DM Mono',monospace"}}>
+        Loading...
+      </div>
+    )
   }
 
   return (
-    <div style={{
-      minHeight: '100vh', background: '#080809',
-      display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
-      fontFamily: "'DM Mono', monospace",
-    }}>
-      <div style={{ textAlign: 'center', marginBottom: 48 }}>
-        <div style={{
-          display: 'inline-block',
-          background: 'linear-gradient(90deg,#63ffb4,#63d4ff)',
-          WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          fontSize: 11, letterSpacing: 4, textTransform: 'uppercase',
-          fontWeight: 500, marginBottom: 16,
-        }}>Distribution Center</div>
-        <h1 style={{
-          fontFamily: "'Syne', sans-serif",
-          fontSize: 42, fontWeight: 800, color: '#fff', lineHeight: 1.1, marginBottom: 12,
-        }}>Upload Once.<br/>Publish Everywhere.</h1>
-        <p style={{ color: '#555', fontSize: 13 }}>Sign in to connect your accounts and start publishing</p>
+    <div style={{minHeight:'100vh',background:'#080809',fontFamily:"'DM Mono',monospace",padding:'40px 24px 60px',display:'flex',flexDirection:'column',alignItems:'center'}}>
+      <div style={{width:'100%',maxWidth:860,display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:40}}>
+        <div>
+          <div style={{background:'linear-gradient(90deg,#63ffb4,#63d4ff)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',fontSize:10,letterSpacing:4,textTransform:'uppercase',fontWeight:500,marginBottom:6}}>
+            Distribution Center
+          </div>
+          <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:28,fontWeight:800,color:'#fff',lineHeight:1.1}}>
+            Upload Once. Publish Everywhere.
+          </h1>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{color:'#555',fontSize:12}}>{user.email}</div>
+          <button onClick={signOut} style={{padding:'8px 16px',borderRadius:9,background:'#1a1a1c',border:'1px solid #2a2a2e',color:'#555',fontSize:11,cursor:'pointer',fontFamily:"'DM Mono',monospace"}}>
+            Sign out
+          </button>
+        </div>
       </div>
 
-      <div style={{
-        background: '#0e0e10', border: '1px solid #1e1e21',
-        borderRadius: 20, padding: '40px 48px', width: 400,
-        display: 'flex', flexDirection: 'column', gap: 16,
-      }}>
-        <button onClick={signInWithGoogle} style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
-          padding: '14px 24px', borderRadius: 12,
-          background: '#fff', border: 'none',
-          color: '#000', fontSize: 14, fontWeight: 600,
-          cursor: 'pointer', fontFamily: "'DM Mono', monospace",
-        }}>
-          <svg width="18" height="18" viewBox="0 0 24 24">
-            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-          </svg>
-          Continue with Google (YouTube)
-        </button>
+      <div style={{width:'100%',maxWidth:860,display:'flex',flexDirection:'column',gap:20}}>
 
-        <div style={{ textAlign: 'center', color: '#333', fontSize: 11 }}>
-          More platforms coming — TikTok, Instagram, Twitter
+        <div
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+          onClick={() => { if (!file) fileRef.current.click() }}
+          style={{
+            border: isDragging ? '2px dashed #63ffb4' : file ? '2px dashed #63ffb455' : '2px dashed #222',
+            borderRadius:20, padding: file ? '22px 28px' : '52px 28px',
+            textAlign:'center', cursor: file ? 'default' : 'pointer',
+            background: isDragging ? 'rgba(99,255,180,0.04)' : file ? 'rgba(99,255,180,0.02)' : '#0e0e10',
+            transition:'all 0.25s'
+          }}
+        >
+          <input ref={fileRef} type="file" accept="video/*" style={{display:'none'}} onChange={(e) => { const f = e.target.files[0]; if (f) setFile(f) }}/>
+          {file ? (
+            <div style={{display:'flex',alignItems:'center',gap:18}}>
+              <div style={{width:52,height:52,borderRadius:12,background:'linear-gradient(135deg,#63ffb422,#63d4ff22)',border:'1.5px solid #63ffb433',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,flexShrink:0}}>🎬</div>
+              <div style={{textAlign:'left',flex:1,minWidth:0}}>
+                <div style={{color:'#fff',fontSize:14,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{file.name}</div>
+                <div style={{color:'#555',fontSize:11,marginTop:3}}>{fmtSize(file.size)}</div>
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); reset() }} style={{background:'#1a1a1c',border:'1px solid #2a2a2e',color:'#666',borderRadius:8,padding:'6px 12px',cursor:'pointer',fontSize:12,fontFamily:"'DM Mono',monospace"}}>
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{fontSize:34,marginBottom:14,opacity:0.4}}>⬆</div>
+              <div style={{color:'#fff',fontSize:15,marginBottom:7}}>Drop your video here</div>
+              <div style={{color:'#444',fontSize:12}}>or click to browse · Any size · MP4, MOV, AVI, WebM</div>
+            </div>
+          )}
         </div>
 
-        <div style={{
-          background: '#131315', border: '1px solid #1e1e21',
-          borderRadius: 10, padding: '12px 16px',
-          color: '#555', fontSize: 11, lineHeight: 1.7, textAlign: 'center',
-        }}>
-          🔒 Your credentials are never stored by this app.<br/>
-          Google handles your login securely.
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:12}}>
+          {[
+            {name:'YouTube',icon:'▶',color:'#FF0000',bg:'#1a0000',connected:true},
+            {name:'TikTok',icon:'♪',color:'#00f2ea',bg:'#00111a',connected:false},
+            {name:'Instagram',icon:'◈',color:'#E1306C',bg:'#1a0011',connected:false},
+            {name:'Twitter',icon:'✕',color:'#ffffff',bg:'#0d0d0d',connected:false},
+            {name:'Facebook',icon:'f',color:'#1877F2',bg:'#000a1a',connected:false},
+          ].map((p) => (
+            <div key={p.name} style={{background:p.connected?p.bg:'#0e0e10',border:`1.5px solid ${p.connected?p.color+'55':'#1e1e21'}`,borderRadius:14,padding:'16px 18px',opacity:p.connected?1:0.5}}>
+              <div style={{width:36,height:36,borderRadius:9,background:'#131315',border:`1.5px solid ${p.color}44`,display:'flex',alignItems:'center',justifyContent:'center',color:p.color,fontSize:14,fontWeight:700,marginBottom:10}}>{p.icon}</div>
+              <div style={{color:p.connected?'#fff':'#888',fontSize:13,fontWeight:500,marginBottom:6}}>{p.name}</div>
+              {p.connected ? (
+                <div style={{display:'inline-flex',alignItems:'center',gap:4,background:'rgba(99,255,180,0.08)',border:'1px solid rgba(99,255,180,0.2)',borderRadius:20,padding:'2px 9px',color:'#63ffb4',fontSize:9}}>
+                  <div style={{width:4,height:4,borderRadius:'50%',background:'#63ffb4'}}/>Connected
+                </div>
+              ) : (
+                <div style={{color:'#444',fontSize:9}}>Coming soon</div>
+              )}
+            </div>
+          ))}
         </div>
+
+        {file && (
+          <button onClick={() => setShowMeta(!showMeta)} style={{padding:'10px',borderRadius:10,background:showMeta?'rgba(99,255,180,0.07)':'#0e0e10',border:`1px solid ${showMeta?'#63ffb433':'#1e1e21'}`,color:showMeta?'#63ffb4':'#444',fontSize:11,cursor:'pointer',fontFamily:"'DM Mono',monospace"}}>
+            {showMeta ? '▲ Hide Caption & Details' : '▼ Add Caption & Details'}
+          </button>
+        )}
+
+        {file && showMeta && (
+          <div style={{background:'#0e0e10',border:'1px solid #1e1e21',borderRadius:16,padding:'24px 28px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+            <div>
+              <div style={{marginBottom:16}}>
+                <label style={labelStyle}>Title ({meta.title.length}/100)</label>
+                <input value={meta.title} onChange={(e) => setMeta((m) => ({...m,title:e.target.value.slice(0,100)}))} placeholder="Add a title..." style={inputStyle}/>
+              </div>
+              <div style={{marginBottom:16}}>
+                <label style={labelStyle}>Description</label>
+                <textarea value={meta.description} onChange={(e) => setMeta((m) => ({...m,description:e.target.value}))} placeholder="Write your description..." rows={5} style={{...inputStyle,resize:'vertical',lineHeight:1.6}}/>
+              </div>
+              <div>
+                <label style={labelStyle}>Tags (comma-separated)</label>
+                <input value={meta.tags} onChange={(e) => setMeta((m) => ({...m,tags:e.target.value}))} placeholder="tag1, tag2, tag3..." style={inputStyle}/>
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Visibility</label>
+              <select value={meta.visibility} onChange={(e) => setMeta((m) => ({...m,visibility:e.target.value}))} style={{...inputStyle,appearance:'none'}}>
+                <option value="public">Public</option>
+                <option value="unlisted">Unlisted</option>
+                <option value="private">Private</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {uploading && (
+          <div style={{background:'#0e0e10',border:'1px solid #1e1e21',borderRadius:12,padding:'20px 24px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+              <div style={{color:'#fff',fontSize:13}}>{status}</div>
+              <div style={{color:'#63ffb4',fontSize:13,fontWeight:600}}>{progress}%</div>
+            </div>
+            <div style={{height:4,background:'#1a1a1c',borderRadius:2,overflow:'hidden'}}>
+              <div style={{height:'100%',width:`${progress}%`,background:'linear-gradient(90deg,#63ffb4,#63d4ff)',borderRadius:2,transition:'width 0.3s ease'}}/>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div style={{background:'rgba(255,50,50,0.05)',border:'1px solid rgba(255,50,50,0.2)',borderRadius:12,padding:'16px 20px',color:'#ff6666',fontSize:13}}>
+            {error}
+          </div>
+        )}
+
+        {result && (
+          <div style={{background:'rgba(99,255,180,0.05)',border:'1px solid rgba(99,255,180,0.25)',borderRadius:14,padding:'20px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:16}}>
+            <div>
+              <div style={{color:'#63ffb4',fontSize:15,fontWeight:600,marginBottom:4}}>✓ Uploaded to YouTube!</div>
+              <div style={{color:'#555',fontSize:12}}>Your video is live</div>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <a href={result.url} target="_blank" rel="noreferrer" style={{padding:'9px 18px',borderRadius:9,background:'#FF0000',border:'none',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:"'DM Mono',monospace",textDecoration:'none'}}>
+                View on YouTube
+              </a>
+              <button onClick={reset} style={{padding:'9px 16px',borderRadius:9,background:'#1a1a1c',border:'1px solid #2a2a2e',color:'#666',fontSize:12,cursor:'pointer',fontFamily:"'DM Mono',monospace"}}>
+                Upload Another
+              </button>
+            </div>
+          </div>
+        )}
+
+        {file && !result && (
+          <button onClick={uploadToYouTube} disabled={uploading} style={{padding:'14px',borderRadius:12,background:uploading?'#1a1a1c':'linear-gradient(135deg,#63ffb4,#63d4ff)',border:'none',color:uploading?'#333':'#000',fontSize:13,fontWeight:700,cursor:uploading?'not-allowed':'pointer',fontFamily:"'DM Mono',monospace"}}>
+            {uploading ? 'Uploading...' : 'Upload to YouTube'}
+          </button>
+        )}
+
       </div>
     </div>
   )
