@@ -81,8 +81,8 @@ export default function Dashboard() {
     setStatus('Initializing...')
 
     try {
-      // Step 1: Get upload URL from our API (bypasses CORS)
-      const res = await fetch('/api/upload/youtube', {
+      // Step 1: Get upload URL from YouTube via our API
+      const initRes = await fetch('/api/upload/youtube', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -95,44 +95,30 @@ export default function Dashboard() {
         }),
       })
 
-      const data = await res.json()
-      if (!data.uploadUrl) throw new Error(data.error || 'Failed to get upload URL')
+      const initData = await initRes.json()
+      if (!initData.uploadUrl) throw new Error(initData.error || 'Failed to get upload URL')
 
       setStatus('Uploading to YouTube...')
+      setProgress(10)
 
-      // Step 2: Upload directly to YouTube's URL (no size limit, no CORS issue)
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        xhr.open('PUT', data.uploadUrl)
-        xhr.setRequestHeader('Content-Type', file.type)
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 100)
-            setProgress(pct)
-            setStatus(`Uploading... ${pct}%`)
-          }
-        }
-
-        xhr.onload = () => {
-          if (xhr.status === 200 || xhr.status === 201) {
-            try {
-              const json = JSON.parse(xhr.responseText)
-              setResult({ videoId: json.id, url: `https://youtube.com/watch?v=${json.id}` })
-              setStatus('')
-              setProgress(100)
-              resolve()
-            } catch(e) {
-              reject(new Error('Upload done but could not read response'))
-            }
-          } else {
-            reject(new Error(`Upload failed: ${xhr.responseText}`))
-          }
-        }
-
-        xhr.onerror = () => reject(new Error('Network error. Check your connection.'))
-        xhr.send(file)
+      // Step 2: Send file through our API proxy (avoids CORS + size limits)
+      const uploadRes = await fetch('/api/upload/youtube', {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type,
+          'x-upload-url': initData.uploadUrl,
+          'x-video-type': file.type,
+        },
+        body: file,
       })
+
+      setProgress(90)
+      const uploadData = await uploadRes.json()
+      if (!uploadData.success) throw new Error(uploadData.error || 'Upload failed')
+
+      setResult({ videoId: uploadData.videoId, url: uploadData.url })
+      setProgress(100)
+      setStatus('')
 
     } catch (err) {
       setError(err.message)
