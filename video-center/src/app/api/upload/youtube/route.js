@@ -31,7 +31,7 @@ export async function POST(request) {
 
     const contentType = request.headers.get('content-type') || ''
 
-    // Step 1: Get upload URL (JSON request)
+    // Step 1: Get resumable upload URL from YouTube
     if (contentType.includes('application/json')) {
       const body = await request.json()
       const { title, description, tags, visibility, fileType, fileSize } = body
@@ -71,7 +71,7 @@ export async function POST(request) {
       return NextResponse.json({ uploadUrl })
     }
 
-    // Step 2: Proxy the actual file upload
+    // Step 2: Proxy the actual file upload to YouTube
     const uploadUrl = request.headers.get('x-upload-url')
     const videoContentType = request.headers.get('x-video-type') || 'video/mp4'
 
